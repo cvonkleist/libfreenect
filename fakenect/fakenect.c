@@ -34,8 +34,24 @@
 #ifdef _WIN32
 #include <windows.h>
 #endif
+#include "../src/freenect_internal.h"
+#include <libfreenect-registration.h>
 
 #define GRAVITY 9.80665
+
+// (cvk) this is added stuff to support playback of raw depth frames in
+// REGISTERED mode.  globals are copied from registration.c.
+#define DEPTH_X_RES 640
+#define DEPTH_Y_RES 480
+#define DEPTH_MAX_METRIC_VALUE FREENECT_DEPTH_MM_MAX_VALUE
+#define DEPTH_NO_MM_VALUE      FREENECT_DEPTH_MM_NO_VALUE
+#define DEPTH_MAX_RAW_VALUE    FREENECT_DEPTH_RAW_MAX_VALUE
+#define DEPTH_NO_RAW_VALUE     FREENECT_DEPTH_RAW_NO_VALUE
+#define DEPTH_MIRROR_X 0
+#define REG_X_VAL_SCALE 256 // "fixed-point" precision for double -> int32_t conversion
+static void *depth_buffer_registered = NULL;
+freenect_registration registration;
+freenect_depth_format chosen_fmt;
 
 // The dev and ctx are just faked with these numbers
 
@@ -179,6 +195,113 @@ static char *skip_line(char *str)
 	return out + 1;
 }
 
+
+// (cvk) this was stolen from
+// https://github.com/mankoff/libfreenect.git
+// more info: http://kenmankoff.com/2012/05/01/offline-registration-for-the-kinect
+freenect_registration load_registration(char* regfile) 
+{
+
+  FILE *fp = NULL;
+  /* load the regdump file */
+  fp = fopen(regfile, "r");
+  if (!fp) {
+	perror(regfile);
+	exit(1);
+  }
+  
+  freenect_registration reg;
+  // allocate memory and set up pointers
+  // (from freenect_copy_registration in registration.c)
+  reg.raw_to_mm_shift    = (uint16_t*)malloc( sizeof(uint16_t) * DEPTH_MAX_RAW_VALUE );
+  reg.depth_to_rgb_shift = (int32_t*)malloc( sizeof( int32_t) * DEPTH_MAX_METRIC_VALUE );
+  reg.registration_table = (int32_t (*)[2])malloc( sizeof( int32_t) * DEPTH_X_RES * DEPTH_Y_RES * 2 );
+  // load (inverse of kinect_regdump)
+  fread( &reg.reg_info, sizeof(reg.reg_info), 1, fp );
+  fread( &reg.reg_pad_info, sizeof(reg.reg_pad_info), 1, fp);
+  fread( &reg.zero_plane_info, sizeof(reg.zero_plane_info), 1, fp);
+  fread( &reg.const_shift, sizeof(reg.const_shift), 1, fp);
+  fread( reg.raw_to_mm_shift, sizeof(uint16_t), DEPTH_MAX_RAW_VALUE, fp );
+  fread( reg.depth_to_rgb_shift, sizeof(int32_t), DEPTH_MAX_METRIC_VALUE, fp );
+  fread( reg.registration_table, sizeof(int32_t), DEPTH_X_RES*DEPTH_Y_RES*2, fp );
+  fclose(fp);
+
+  return reg;
+}
+
+// (cvk) this was stolen from registration.c, but i modified it to work on
+// normal depth data instead of packed depth data.
+//
+// apply registration data to a single packed frame
+int freenect_apply_registration(freenect_device* dev, uint16_t* input, uint16_t* output_mm)
+{
+	// set output buffer to zero using pointer-sized memory access (~ 30-40% faster than memset)
+	size_t i, *wipe = (size_t*)output_mm;
+	for (i = 0; i < DEPTH_X_RES * DEPTH_Y_RES * sizeof(uint16_t) / sizeof(size_t); i++) wipe[i] = DEPTH_NO_MM_VALUE;
+
+	freenect_registration *reg = &registration;
+
+	uint32_t target_offset = DEPTH_Y_RES * reg->reg_pad_info.start_lines;
+	uint32_t x,y;
+
+	for (y = 0; y < DEPTH_Y_RES; y++) {
+		for (x = 0; x < DEPTH_X_RES; x++) {
+
+			/*// get 8 pixels from the packed frame*/
+			/*if (source_index == 8) {*/
+				/*// (cvk) unpack_8_pixels( input_packed, unpack );*/
+				/*source_index = 0;*/
+			/*}*/
+
+			// get the value at the current depth pixel, convert to millimeters
+			uint16_t metric_depth = reg->raw_to_mm_shift[ input[y * DEPTH_X_RES + x] ];
+			if(x == 320) {
+			//	printf("x = %d / y = %d / input[%d] = %d / metric_depth = %d\n", x, y, y * DEPTH_X_RES + x, input[y * DEPTH_X_RES + x], metric_depth);
+			}
+
+
+			// so long as the current pixel has a depth value
+			if (metric_depth == DEPTH_NO_MM_VALUE) continue;
+			if (metric_depth >= DEPTH_MAX_METRIC_VALUE) continue;
+
+			// calculate the new x and y location for that pixel
+			// using registration_table for the basic rectification
+			// and depth_to_rgb_shift for determining the x shift
+			uint32_t reg_index = DEPTH_MIRROR_X ? ((y + 1) * DEPTH_X_RES - x - 1) : (y * DEPTH_X_RES + x);
+			uint32_t nx = (reg->registration_table[reg_index][0] + reg->depth_to_rgb_shift[metric_depth]) / REG_X_VAL_SCALE;
+			uint32_t ny =  reg->registration_table[reg_index][1];
+
+			// ignore anything outside the image bounds
+			if (nx >= DEPTH_X_RES) continue;
+			// convert nx, ny to an index in the depth image array
+			uint32_t target_index = (DEPTH_MIRROR_X ? ((ny + 1) * DEPTH_X_RES - nx - 1) : (ny * DEPTH_X_RES + nx)) - target_offset;
+
+			// get the current value at the new location
+			uint16_t current_depth = output_mm[target_index];
+
+			// make sure the new location is empty, or the new value is closer
+			if ((current_depth == DEPTH_NO_MM_VALUE) || (current_depth > metric_depth)) {
+				output_mm[target_index] = metric_depth; // always save depth at current location
+
+
+				#ifdef DENSE_REGISTRATION
+					// if we're not on the first row, or the first column
+					if ((nx > 0) && (ny > 0)) {
+						output_mm[target_index - DEPTH_X_RES    ] = metric_depth; // save depth at (x,y-1)
+						output_mm[target_index - DEPTH_X_RES - 1] = metric_depth; // save depth at (x-1,y-1)
+						output_mm[target_index               - 1] = metric_depth; // save depth at (x-1,y)
+					} else if (ny > 0) {
+						output_mm[target_index - DEPTH_X_RES] = metric_depth; // save depth at (x,y-1)
+					} else if (nx > 0) {
+						output_mm[target_index - 1] = metric_depth; // save depth at (x-1,y)
+					}
+				#endif
+			}
+		}
+	}
+	return 0;
+}
+
 int freenect_process_events(freenect_context *ctx)
 {
 	/* This is where the magic happens. We read 1 update from the index
@@ -211,6 +334,26 @@ int freenect_process_events(freenect_context *ctx)
 				if (depth_buffer) {
 					memcpy(depth_buffer, cur_depth, freenect_find_depth_mode(FREENECT_RESOLUTION_MEDIUM, FREENECT_DEPTH_11BIT).bytes);
 					cur_depth = depth_buffer;
+				}
+
+				// (cvk) originally, fakenect could only play
+				// back captured kinect depth data in
+				// FREENECT_DEPTH_11BIT mode, which is set
+				// using a call like this:
+				//
+				//	freenect_set_depth_mode(f_dev, freenect_find_depth_mode(FREENECT_RESOLUTION_MEDIUM, FREENECT_DEPTH_11BIT));
+				//
+				// in this modified version of fakenect, a call
+				// to our modified freenect_find_depth_mode()
+				// stores the requested video mode in
+				// chosen_fmt. then, when we are reading a
+				// depth frame from an input file, we call
+				// freenect_apply_registration() to align the
+				// depth image to the rgb image if chosen_fmt
+				// is FREENECT_DEPTH_REGISTERED.
+				if(chosen_fmt == FREENECT_DEPTH_REGISTERED) {
+					freenect_apply_registration(fake_dev, cur_depth, depth_buffer_registered);
+					cur_depth = depth_buffer_registered;
 				}
 				cur_depth_cb(fake_dev, cur_depth, timestamp);
 			}
@@ -300,7 +443,16 @@ freenect_frame_mode freenect_find_video_mode(freenect_resolution res, freenect_v
 
 freenect_frame_mode freenect_find_depth_mode(freenect_resolution res, freenect_depth_format fmt) {
     assert(FREENECT_RESOLUTION_MEDIUM == res);
-    assert(FREENECT_DEPTH_11BIT == fmt);
+
+    // (cvk) originally fakenect only allowed playback in 11BIT mode, but now
+    // it will allow the recorded 11BIT frames to be played back in REGISTERED
+    // mode, so this assertion was changed to allow either one.
+    assert(FREENECT_DEPTH_11BIT == fmt || FREENECT_DEPTH_REGISTERED == fmt);
+    chosen_fmt = fmt;
+
+    if(chosen_fmt == FREENECT_DEPTH_REGISTERED)
+	    printf("* * * * * fakenect: playing back 11BIT data in REGISTERED mode * * * * *\n");
+
     // NOTE: This will leave uninitialized values if new fields are added.
     // To update this line run the "record" program, look at the top output
     freenect_frame_mode out = {256, 1, {0}, 614400, 640, 480, 11, 5, 30, 1};
@@ -323,6 +475,18 @@ int freenect_open_device(freenect_context *ctx, freenect_device **dev, int index
 int freenect_init(freenect_context **ctx, freenect_usb_context *usb_ctx)
 {
 	*ctx = fake_ctx;
+	// (cvk) initialize space for the raw depth image to be rebuilt into a
+	// new buffer, where it will be aligned to the rgb image.
+	//
+	// TODO: free this memory on exit, lol
+	depth_buffer_registered = malloc(freenect_find_depth_mode(FREENECT_RESOLUTION_MEDIUM, FREENECT_DEPTH_11BIT).bytes);
+
+	// (cvk) load up the saved kinect registration data from a dump file. for now, this must be dumped with the kinect_register tool.
+	//
+	// more info:
+	//
+	// http://kenmankoff.com/2012/05/01/offline-registration-for-the-kinect
+	registration = load_registration("/tmp/fakenect_registration_data");
 	return 0;
 }
 
