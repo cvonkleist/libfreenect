@@ -81,7 +81,7 @@ else()
 endif()
 
 
-install (TARGETS glview regview fakenect_regview hiview
+install (TARGETS glview regview fakenect_regview hiview fakenect_dump_registration
   DESTINATION bin)
 
 if (BUILD_C_SYNC)
