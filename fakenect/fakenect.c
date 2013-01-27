@@ -233,6 +233,9 @@ freenect_registration load_registration(char* regfile)
 // normal depth data instead of packed depth data.
 //
 // apply registration data to a single packed frame
+//
+// TODO: would it be better to register the RGB image to the depth frame? this
+// would prevent destruction of depth data due to aliasing.
 int freenect_apply_registration(freenect_device* dev, uint16_t* input, uint16_t* output_mm)
 {
 	// set output buffer to zero using pointer-sized memory access (~ 30-40% faster than memset)
@@ -481,12 +484,16 @@ int freenect_init(freenect_context **ctx, freenect_usb_context *usb_ctx)
 	// TODO: free this memory on exit, lol
 	depth_buffer_registered = malloc(freenect_find_depth_mode(FREENECT_RESOLUTION_MEDIUM, FREENECT_DEPTH_11BIT).bytes);
 
-	// (cvk) load up the saved kinect registration data from a dump file. for now, this must be dumped with the kinect_register tool.
+	// (cvk) load up saved kinect registration data from a dump file.  the
+	// file should have been saved by `record` into the FAKENECT_PATH
+	// directory into a file called `registration`.
 	//
-	// more info:
-	//
-	// http://kenmankoff.com/2012/05/01/offline-registration-for-the-kinect
-	registration = load_registration("/tmp/fakenect_registration_data");
+	// fakenect can use this registration data to turn recorded raw 11BIT
+	// depth frames into REGISTERED depth frames (which have been
+	// registered to the intrinsics of the RGB camera).
+	char registration_filename[512];
+	sprintf(registration_filename, "%s/registration", getenv("FAKENECT_PATH")); // buffer overflow, lol
+	registration = load_registration(registration_filename);
 	return 0;
 }
 
