@@ -36,7 +36,9 @@ $ fakenect_dump_registration <savefile>
 To make sure that this code works as expected, there is a ruby script which
 captures screenshots from a depth/RGB stream viewer using "live" libfreenect
 data and recorded fakenect data. If REGISTRED mode record/playback works as
-intended, these images should be visually identical.
+intended, these images should appear virtually identical to a human. The script
+also saves an RGB image which can be compared to the depth gradients to test
+alignment.
 
 Some test images are here:
 
