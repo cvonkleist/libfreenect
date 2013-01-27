@@ -9,12 +9,29 @@ frames. 11BIT mode means that the depth frames contain the Kinect's raw 11-bit
 depth reading value at each pixel. REGISTERED mode means that these depth
 values are converted to millimeters (to avoid having to store floating-point
 data), and then the depth frame is aligned to the RGB frame based on the depth
-camera's intrinsics. (The conversion from 11BIT->REGISTERED is done in software
-by libfreenect, not in Kinect hardware.)
+camera's intrinsics. (The conversion from 11BIT to REGISTERED is done in
+software by libfreenect, not in Kinect hardware.)
 
-Before this custom fork, fakenect only supported 11BIT mode.  This custom fork
-allows the depth images to be recorded in 11BIT mode as normal, but then played
-back in either 11BIT or REGISTERED mode.
+The fakenect distrubuted with libfreenect only supports playback in 11BIT mode
+(with depth frames not registered to RGB frames).  This custom fork allows the
+depth images to be recorded in 11BIT mode as normal, but then played back in
+either 11BIT or REGISTERED mode.
+
+The fakenect in this fork saves registration data in the same output directory
+as the depth/RGB/accelerometer frames in a file called `registration`. This
+file is required for playback in REGISTERED mode.
+
+The code to save the Kinect's registration data to a file (and reload it) came
+from here:
+
+https://github.com/mankoff/libfreenect.git
+
+There is also a standalone registration dumper included in this fork:
+
+$ fakenect_dump_registration <savefile>
+
+
+=== Testing
 
 To make sure that this code works as expected, there is a ruby script which
 captures screenshots from a depth/RGB stream viewer using "live" libfreenect
@@ -25,13 +42,25 @@ Some test images are here:
 
 https://github.com/cvonkleist/libfreenect/tree/master/fakenect/registered_playback_tests
 
+
 === How to install
 
 See the original libfreenect readme below.
 
+
+=== How to record depth/RGB/accelerometer data from the Kinect
+
+$ record <recording_dir>
+
+e.g.:
+
+$ record office_recording1
+
 === How to run fakenect
 
 $ fakenect <recording_dir> command line
+
+e.g.:
 
 $ fakenect office_recording1 glview
 
