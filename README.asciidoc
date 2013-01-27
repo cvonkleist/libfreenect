@@ -25,9 +25,14 @@ Some test images are here:
 
 https://github.com/cvonkleist/libfreenect/tree/master/fakenect/registered_playback_tests
 
-.How to run fakenect
-----
+=== How to install
+
+See the original libfreenect readme below.
+
+=== How to run fakenect
+
 $ fakenect <recording_dir> command line
+
 $ fakenect office_recording1 glview
 
 
