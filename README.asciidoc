@@ -1,3 +1,44 @@
+== (cvk) libfreenect with REGISTERED-mode record/playback in fakenect
+
+This is a fork of libfreenect which includes REGISTERED-mode record/playback in
+fakenect.
+
+Normally, an application using libfreenect requests either 11BIT or REGISTERED
+mode when initializing freenect, which determines the output format of depth
+frames. 11BIT mode means that the depth frames contain the Kinect's raw 11-bit
+depth reading value at each pixel. REGISTERED mode means that these depth
+values are converted to millimeters (to avoid having to store floating-point
+data), and then the depth frame is aligned to the RGB frame based on the depth
+camera's intrinsics. (The conversion from 11BIT->REGISTERED is done in software
+by libfreenect, not in Kinect hardware.)
+
+Before this custom fork, fakenect only supported 11BIT mode.  This custom fork
+allows the depth images to be recorded in 11BIT mode as normal, but then played
+back in either 11BIT or REGISTERED mode.
+
+To make sure that this code works as expected, there is a ruby script which
+captures screenshots from a depth/RGB stream viewer using "live" libfreenect
+data and recorded fakenect data. If REGISTRED mode record/playback works as
+intended, these images should be visually identical.
+
+Some test images are here:
+
+https://github.com/cvonkleist/libfreenect/tree/master/fakenect/registered_playback_tests
+
+.How to run fakenect
+----
+$ fakenect <recording_dir> command line
+$ fakenect office_recording1 glview
+
+
+=== More READMEs
+
+The fakenect README can be found here:
+
+https://github.com/cvonkleist/libfreenect/tree/master/fakenect
+
+Stuff that follows this paragraph is the original libfreenect README.
+
 == libfreenect
 
 Ongoing Development and Maintenance by the OpenKinect Community
